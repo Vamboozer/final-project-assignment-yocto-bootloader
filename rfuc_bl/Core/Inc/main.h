@@ -22,8 +22,6 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include "cmsis_os.h"
-
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -38,15 +36,28 @@ typedef struct {
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
 
-extern osThreadId_t CommandProcessTaskHandle;
-extern osMessageQueueId_t UartTxQueueHandle;
-extern UART_HandleTypeDef huart1;
 extern SPI_HandleTypeDef hspi1;
+extern SPI_HandleTypeDef hspi2;
+extern SPI_HandleTypeDef hspi3;
+extern DAC_HandleTypeDef hdac1;
+extern UART_HandleTypeDef huart1;
 
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
+
+// Allows for selection of external Rx or Tx DAC Channels
+typedef enum {
+	DAC_CHANNEL_A = 0, // External DAC Channel A
+	DAC_CHANNEL_B = 1, // External DAC Channel B
+	DAC_CHANNEL_C = 2, // External DAC Channel C
+	DAC_CHANNEL_D = 3, // External DAC Channel D
+	DAC_CHANNEL_E = 4, // External DAC Channel E
+	DAC_CHANNEL_F = 5, // External DAC Channel F
+	DAC_CHANNEL_G = 6, // External DAC Channel G
+	DAC_CHANNEL_H = 7, // External DAC Channel H
+} ExternDacChannel_e;
 
 /* USER CODE END EM */
 
@@ -54,8 +65,6 @@ extern SPI_HandleTypeDef hspi1;
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
-void System_DeInit(void);
 
 /* USER CODE END EFP */
 
@@ -113,8 +122,6 @@ void System_DeInit(void);
 #define SPI3MISO_AR_GPIO_Port GPIOG
 #define SPI3_NSS_TxDAC_Pin GPIO_PIN_10
 #define SPI3_NSS_TxDAC_GPIO_Port GPIOC
-#define PURX_Pin GPIO_PIN_10
-#define PURX_GPIO_Port GPIOA
 #define GPIO1_Pin GPIO_PIN_12
 #define GPIO1_GPIO_Port GPIOA
 #define GPI_DO_NOT_USE_Pin GPIO_PIN_13
@@ -127,8 +134,6 @@ void System_DeInit(void);
 #define SPI3MOSI_AR_GPIO_Port GPIOG
 #define SPI3_NSS_TxSynth_Pin GPIO_PIN_3
 #define SPI3_NSS_TxSynth_GPIO_Port GPIOD
-#define PUTX_Pin GPIO_PIN_9
-#define PUTX_GPIO_Port GPIOA
 #define GPIO0_Pin GPIO_PIN_11
 #define GPIO0_GPIO_Port GPIOA
 #define SPI3_NSS_AR_Pin GPIO_PIN_12

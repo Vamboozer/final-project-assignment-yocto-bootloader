@@ -92,7 +92,7 @@ void OPENBL_RAM_JumpToAddress(uint32_t Address)
   Function_Pointer jump_to_address;
 
   /* De-initialize all HW resources used by the Open Bootloader to their reset values */
-  OPENBL_DeInit();
+  //OPENBL_DeInit();
 
   /* Enable IRQ */
   Common_EnableIrq();

@@ -51,15 +51,6 @@ void OPENBL_Init(void)
 }
 
 /**
-  * @brief  This function is used to de-initialize the Open Bootloader MW.
-  * @retval None.
-  */
-void OPENBL_DeInit(void)
-{
-  OpenBootloader_DeInit();
-}
-
-/**
   * @brief  This function is used to de-initialize the registered interfaces in the Open Bootloader MW.
   * @retval None.
   */

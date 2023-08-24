@@ -8,21 +8,21 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdbool.h>
+#include "stdbool.h"
 #include "app_openbootloader.h"
 #include "interfaces_conf.h"
-#include "USART1Terminal.h"
 #include "spi_interface.h"
 #include "stm32l4xx_it.h"
+#include "openbl_spi_cmd.h"
+#include "stdarg.h"
+#include "string.h"
+#include "stdio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
-typedef StaticTask_t osStaticThreadDef_t;
-typedef StaticQueue_t osStaticMessageQDef_t;
 /* USER CODE BEGIN PTD */
 
 /* USER CODE END PTD */
@@ -46,36 +46,6 @@ SPI_HandleTypeDef hspi3;
 
 UART_HandleTypeDef huart1;
 
-/* Definitions for CommandProcessTask */
-osThreadId_t CommandProcessTaskHandle;
-uint32_t CommandProcessTaskBuffer[ 8192 ];
-osStaticThreadDef_t CommandProcessTaskControlBlock;
-const osThreadAttr_t CommandProcessTask_attributes = {
-  .name = "CommandProcessTask",
-  .cb_mem = &CommandProcessTaskControlBlock,
-  .cb_size = sizeof(CommandProcessTaskControlBlock),
-  .stack_mem = &CommandProcessTaskBuffer[0],
-  .stack_size = sizeof(CommandProcessTaskBuffer),
-  .priority = (osPriority_t) osPriorityRealtime1,
-};
-/* Definitions for USART1TermTask */
-osThreadId_t USART1TermTaskHandle;
-const osThreadAttr_t USART1TermTask_attributes = {
-  .name = "USART1TermTask",
-  .stack_size = 1024 * 4,
-  .priority = (osPriority_t) osPriorityLow2,
-};
-/* Definitions for UartTxQueue */
-osMessageQueueId_t UartTxQueueHandle;
-uint8_t UartTxQueueBuffer[ 10 * sizeof( UartTxStruct ) ];
-osStaticMessageQDef_t UartTxQueueControlBlock;
-const osMessageQueueAttr_t UartTxQueue_attributes = {
-  .name = "UartTxQueue",
-  .cb_mem = &UartTxQueueControlBlock,
-  .cb_size = sizeof(UartTxQueueControlBlock),
-  .mq_mem = &UartTxQueueBuffer,
-  .mq_size = sizeof(UartTxQueueBuffer)
-};
 /* USER CODE BEGIN PV */
 
 extern TIM_HandleTypeDef htim3;
@@ -90,10 +60,14 @@ static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_SPI3_Init(void);
 static void MX_USART1_UART_Init(void);
-void CommandProcessTaskFunc(void *argument);
-void USART1TerminalTaskFunc(void *argument);
-
 /* USER CODE BEGIN PFP */
+
+void PRINTF(const char *format, ...);
+void SetRFBoardToSafeState(void);
+uint32_t mVTo12bitDigitalOutput(uint32_t milliVolt);
+uint32_t mVTo12bitDigitalOutput_Halfx(uint32_t milliVolt);
+void Spi2_UpdateRxDac(ExternDacChannel_e Channel, uint16_t DacValue);
+void Spi3_UpdateTxDac(ExternDacChannel_e Channel, uint16_t DacValue);
 
 /* USER CODE END PFP */
 
@@ -137,57 +111,33 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  /* USER CODE END 2 */
-
-  /* Init scheduler */
-  osKernelInitialize();
-
-  /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
-  /* USER CODE END RTOS_MUTEX */
-
-  /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
-  /* USER CODE END RTOS_SEMAPHORES */
-
-  /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
-  /* USER CODE END RTOS_TIMERS */
-
-  /* Create the queue(s) */
-  /* creation of UartTxQueue */
-  UartTxQueueHandle = osMessageQueueNew (10, sizeof(UartTxStruct), &UartTxQueue_attributes);
-
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  /* USER CODE END RTOS_QUEUES */
-
-  /* Create the thread(s) */
-  /* creation of CommandProcessTask */
-  CommandProcessTaskHandle = osThreadNew(CommandProcessTaskFunc, NULL, &CommandProcessTask_attributes);
-
-  /* creation of USART1TermTask */
-  USART1TermTaskHandle = osThreadNew(USART1TerminalTaskFunc, NULL, &USART1TermTask_attributes);
-
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  /* USER CODE END RTOS_THREADS */
-
-  /* USER CODE BEGIN RTOS_EVENTS */
+  // Initialize RF Board Hardware to Safe State
+  SetRFBoardToSafeState();
 
   /* Initialize the OpenBootloader */
   OpenBootloader_Init();
 
-  /* USER CODE END RTOS_EVENTS */
+  PRINTF("\033[2J"); // Clear the terminal
+  PRINTF("\033[s\033[1;1H"); // Save cursor position, return to top left corner
+  PRINTF("Running Bootloader Version %d.%d ...\n\r", ((OPENBL_SPI_VERSION >> 4) & 0x0F), (OPENBL_SPI_VERSION & 0x0F));
 
-  /* Start scheduler */
-  osKernelStart();
+  // Alert SOM that the RFB is in a safe state and we're ready to bootload
+  HAL_GPIO_WritePin(GPIO1_GPIO_Port, GPIO1_Pin, GPIO_PIN_SET);
 
-  /* We should never get here as control is now taken by the scheduler */
+  while(OPENBL_SPI_ReadByte() != 0x5AU){} // Blocking call -> Wait for SOM to be ready
+
+  SPI_SetSpiDetected(1U);
+  OPENBL_SPI_SendByte(SYNC_BYTE); // Send synchronization byte
+  OPENBL_SPI_SendAcknowledgeByte(ACK_BYTE); // Send acknowledgment
+  OPENBL_InterfaceDetection();
+  HAL_GPIO_WritePin(GPIO1_GPIO_Port, GPIO1_Pin, GPIO_PIN_RESET); // Deassert busy flag until needed again
+  /* USER CODE END 2 */
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+  while (1){
+    // Process the commands from the detected interface
+    OPENBL_CommandProcess();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -453,7 +403,7 @@ static void MX_USART1_UART_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK)
+  if (HAL_UARTEx_EnableFifoMode(&huart1) != HAL_OK)
   {
     Error_Handler();
   }
@@ -511,6 +461,9 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SPI3_NSS_TxDAC_GPIO_Port, SPI3_NSS_TxDAC_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIO1_GPIO_Port, GPIO1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SPI3_NSS_TxSynth_GPIO_Port, SPI3_NSS_TxSynth_Pin, GPIO_PIN_SET);
@@ -573,11 +526,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : GPIO1_Pin GPIO0_Pin */
-  GPIO_InitStruct.Pin = GPIO1_Pin|GPIO0_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  /*Configure GPIO pin : GPIO1_Pin */
+  GPIO_InitStruct.Pin = GPIO1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIO1_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : GPI_DO_NOT_USE_Pin */
   GPIO_InitStruct.Pin = GPI_DO_NOT_USE_Pin;
@@ -591,6 +545,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(SPI3_NSS_TxSynth_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : GPIO0_Pin */
+  GPIO_InitStruct.Pin = GPIO0_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIO0_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : SPI3_NSS_AR_Pin GPO_TPX_Pin GPO_TP16_Pin */
   GPIO_InitStruct.Pin = SPI3_NSS_AR_Pin|GPO_TPX_Pin|GPO_TP16_Pin;
@@ -628,77 +588,199 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void System_DeInit(void)
-{
-  HAL_RCC_DeInit();
+void PRINTF(const char *format, ...){
+	va_list ap;
+	char bufferLocal[255]={0}; // print up to 254 characters per PRINTF
 
-  /* Disable timer */
-  HAL_TIM_Base_DeInit(&htim3);
-  HAL_TIM_Base_Stop_IT(&htim3);
-  __HAL_RCC_TIM3_CLK_DISABLE();
-  HAL_NVIC_DisableIRQ(TIM3_IRQn);
+	va_start(ap, format);
+	vsnprintf((char *)bufferLocal, 255, format, ap);
+	va_end(ap);
 
-  /* Disable interfaces */
-  HAL_SPI_DeInit(&hspi1);
-  HAL_SPI_DeInit(&hspi2);
-  HAL_SPI_DeInit(&hspi3);
-  HAL_UART_DeInit(&huart1);
+	HAL_UART_Transmit(&huart1, (uint8_t *)bufferLocal, strlen(bufferLocal), 100);
+}
 
-  // Peripherals to intentionally keep initialized:
-  // All GPIO
-  // Both MCU DACs
+void SetRFBoardToSafeState(void){
+	char DeviceData[4];
+
+	// Initialize and Enable RFuC DACs
+	HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, mVTo12bitDigitalOutput(2000)); // initialize RVCA0 to 2V
+	HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_2, DAC_ALIGN_12B_R, mVTo12bitDigitalOutput(2000)); // initialize TVCA to 26mV
+	HAL_DAC_Start(&hdac1, DAC_CHANNEL_1); // RVCA0
+	HAL_DAC_Start(&hdac1, DAC_CHANNEL_2); // TVCA
+
+	// Enable the External Rx DAC's internal 2.5V reference voltage
+	DeviceData[0] = 0x08;
+	DeviceData[1] = 0x00;
+	DeviceData[2] = 0x00;
+	DeviceData[3] = 0x01;
+	HAL_GPIO_WritePin(SPI2_NSS_RxDAC_GPIO_Port, SPI2_NSS_RxDAC_Pin, GPIO_PIN_RESET); // SPI2 CS -> RxDAC
+	HAL_SPI_Transmit(&hspi2, (uint8_t *)DeviceData, 4, 100);
+	HAL_GPIO_WritePin(SPI2_NSS_RxDAC_GPIO_Port, SPI2_NSS_RxDAC_Pin, GPIO_PIN_SET); // SPI2 CS -> RxDAC
+	HAL_Delay(1); // Delay in milliseconds
+
+	// Initialize External RxDAC Channels
+	Spi2_UpdateRxDac(DAC_CHANNEL_A, mVTo12bitDigitalOutput_Halfx(5000)); // Init Channel A (TP18) to 5000mV
+	//Spi2_UpdateRxDac(DAC_CHANNEL_B, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel B (TP22) to 0mV
+	Spi2_UpdateRxDac(DAC_CHANNEL_C, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel C (TP19) to 0mV
+	//Spi2_UpdateRxDac(DAC_CHANNEL_D, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel D (TP21) to 0mV
+	Spi2_UpdateRxDac(DAC_CHANNEL_E, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel E (TP20) to 0mV
+	//Spi2_UpdateRxDac(DAC_CHANNEL_F, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel F (RXTUNE) to 0mV
+	Spi2_UpdateRxDac(DAC_CHANNEL_G, mVTo12bitDigitalOutput_Halfx(2000)); // Init Channel G (RVCA1) to 2000mV
+	//Spi2_UpdateRxDac(DAC_CHANNEL_H, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel H (VTUNE) to 0mV
+
+	// Enable the External Tx DAC's internal 2.5V reference voltage
+	DeviceData[0] = 0x08;
+	DeviceData[1] = 0x00;
+	DeviceData[2] = 0x00;
+	DeviceData[3] = 0x01;
+	HAL_GPIO_WritePin(SPI3_NSS_TxDAC_GPIO_Port, SPI3_NSS_TxDAC_Pin, GPIO_PIN_RESET); // SPI3 CS -> TxDAC
+	HAL_SPI_Transmit(&hspi3, (uint8_t *)DeviceData, 4, 100);
+	HAL_GPIO_WritePin(SPI3_NSS_TxDAC_GPIO_Port, SPI3_NSS_TxDAC_Pin, GPIO_PIN_SET); // SPI3 CS -> TxDAC
+	HAL_Delay(1); // Delay in milliseconds
+
+	// --- Initialize External TxDAC Channels ---
+	Spi3_UpdateTxDac(DAC_CHANNEL_A, mVTo12bitDigitalOutput_Halfx(5000)); // Bit 12 (PBA6; RxDAC-A) to 5000mV
+	//Spi3_UpdateTxDac(DAC_CHANNEL_B, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel B (MLIN) to 0mV
+	Spi3_UpdateTxDac(DAC_CHANNEL_C, mVTo12bitDigitalOutput_Halfx(5000)); // Bit 11 (PBA5; RxDAC-C) to 5000mV
+	//Spi3_UpdateTxDac(DAC_CHANNEL_D, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel D (PBA0) to 0mV
+	Spi3_UpdateTxDac(DAC_CHANNEL_E, mVTo12bitDigitalOutput_Halfx(5000)); // Bit 10 (PBA4; RxDAC-E) to 5000mV
+	//Spi3_UpdateTxDac(DAC_CHANNEL_F, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel F (PBA1) to 0mV
+	//Spi3_UpdateTxDac(DAC_CHANNEL_G, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel G (PBA3) to 0mV
+	//Spi3_UpdateTxDac(DAC_CHANNEL_H, mVTo12bitDigitalOutput_Halfx(0)); // Init Channel H (PBA2) to 0mV
+}
+
+// Convert millivolts to 12 bit digital DAC register value and return the result.
+uint32_t mVTo12bitDigitalOutput(uint32_t milliVolt){
+	uint32_t TwelveBitDigitalOutput;
+
+  /*			    _				 _
+   * 			   |   D			  |
+   * 		Vout = | ----- x G x Vref | + Vos = (0.0006103515625 * D)
+   * 			   |_ 2^N			 _|
+   *
+   *		Where:
+   *			D (Digital Input) = 12bit value
+   *			N (bits of resolution) = 12
+   *			G (gain) = 1
+   *			Vref (Reference Voltage) = 2.5V
+   *			Vos (Offset Voltage) = 0V
+   * */
+
+	TwelveBitDigitalOutput = (uint32_t)(((float)milliVolt / 0.6103515625)+0.5);
+
+	if(TwelveBitDigitalOutput < 0){
+		TwelveBitDigitalOutput = 0; // Vout Min = 0V
+	}
+	else if(TwelveBitDigitalOutput > 4095){
+		TwelveBitDigitalOutput = 4095; // Vout Max = 2.5V
+	}
+
+	return TwelveBitDigitalOutput;
+}
+
+// Convert millivolts to 12 bit digital DAC register value and return the result.
+uint32_t mVTo12bitDigitalOutput_Halfx(uint32_t milliVolt){
+	uint32_t TwelveBitDigitalOutput;
+
+	TwelveBitDigitalOutput = (uint32_t)(((float)milliVolt / 1.2207)+0.5);
+
+	if(TwelveBitDigitalOutput < 0){
+		TwelveBitDigitalOutput = 0; // Vout Min = 0V
+	}
+	else if(TwelveBitDigitalOutput > 4095){
+		TwelveBitDigitalOutput = 4095; // Vout Max = 2.5V
+	}
+
+	return TwelveBitDigitalOutput;
+}
+
+///----------------------------------------------------------------------------
+/// Method Name: Spi2_UpdateRxDac
+/// Description: Update External Rx DAC with provided 12 bit digital DAC
+///				 register value.
+///					@arg DAC_CHANNEL_A: DAC Channel A selected -> TP18
+///					@arg DAC_CHANNEL_B: DAC Channel B selected -> TP22
+///					@arg DAC_CHANNEL_C: DAC Channel C selected -> TP19
+///					@arg DAC_CHANNEL_D: DAC Channel D selected -> TP21
+///					@arg DAC_CHANNEL_E: DAC Channel E selected -> TP20
+///					@arg DAC_CHANNEL_F: DAC Channel F selected -> RXTUNE
+///					@arg DAC_CHANNEL_G: DAC Channel G selected -> RVCA1
+///					@arg DAC_CHANNEL_H: DAC Channel H selected -> VTUNE
+///----------------------------------------------------------------------------
+void Spi2_UpdateRxDac(ExternDacChannel_e Channel, uint16_t DacValue){
+	char DeviceData[4];
+
+	if(DacValue < 0){
+		DacValue = 0; // Vout Min = 0V
+	}
+	else if(DacValue > 4095){
+		DacValue = 4095; // Vout Max = 5.0V
+	}
+
+	DeviceData[0] = 0x03; // Control Bits = Write & Update DAC Ch
+	DeviceData[1] = (Channel << 4) | ((DacValue & 0b111100000000) >> 8); // Mix: MSB = DAC ADDRESS; LSB = D11-D8
+	DeviceData[2] = (DacValue & 0b000011111111); // LSB D7-D0
+	DeviceData[3] = 0x00; // Don't Cares
+	HAL_GPIO_WritePin(SPI2_NSS_RxDAC_GPIO_Port, SPI2_NSS_RxDAC_Pin, GPIO_PIN_RESET); // SPI2 CS -> RxDAC
+	HAL_SPI_Transmit(&hspi2, (uint8_t *)DeviceData, 4, 100);
+	HAL_GPIO_WritePin(SPI2_NSS_RxDAC_GPIO_Port, SPI2_NSS_RxDAC_Pin, GPIO_PIN_SET); // SPI2 CS -> RxDAC
+	HAL_Delay(1); // Delay in milliseconds
+
+	// Enable the External Rx DAC's internal 2.5V reference voltage
+	DeviceData[0] = 0x08;
+	DeviceData[1] = 0x00;
+	DeviceData[2] = 0x00;
+	DeviceData[3] = 0x01;
+	HAL_GPIO_WritePin(SPI2_NSS_RxDAC_GPIO_Port, SPI2_NSS_RxDAC_Pin, GPIO_PIN_RESET); // SPI2 CS -> RxDAC
+	HAL_SPI_Transmit(&hspi2, (uint8_t *)DeviceData, 4, 100);
+	HAL_GPIO_WritePin(SPI2_NSS_RxDAC_GPIO_Port, SPI2_NSS_RxDAC_Pin, GPIO_PIN_SET); // SPI2 CS -> RxDAC
+	HAL_Delay(1); // Delay in milliseconds
+}
+
+///----------------------------------------------------------------------------
+/// Method Name: Spi3_UpdateTxDac
+/// Description: Update External Tx DAC with provided 12 bit digital DAC
+///							 register value.
+///					@arg DAC_CHANNEL_A: DAC Channel A selected -> PAB6
+///					@arg DAC_CHANNEL_B: DAC Channel B selected -> MLIN
+///					@arg DAC_CHANNEL_C: DAC Channel C selected -> PAB5
+///					@arg DAC_CHANNEL_D: DAC Channel D selected -> PAB0
+///					@arg DAC_CHANNEL_E: DAC Channel E selected -> PAB4
+///					@arg DAC_CHANNEL_F: DAC Channel F selected -> PAB1
+///					@arg DAC_CHANNEL_G: DAC Channel G selected -> PAB3
+///					@arg DAC_CHANNEL_H: DAC Channel H selected -> PAB2
+///----------------------------------------------------------------------------
+void Spi3_UpdateTxDac(ExternDacChannel_e Channel, uint16_t DacValue){
+	char DeviceData[4];
+
+	if(DacValue < 0){
+		DacValue = 0; // Vout Min = 0V
+	}
+	else if(DacValue > 4095){
+		DacValue = 4095; // Vout Max = 2.5V
+	}
+
+	DeviceData[0] = 0x03; // Control Bits = Write & Update DAC Ch
+	DeviceData[1] = (Channel << 4) | ((DacValue & 0b111100000000) >> 8); // Mix: MSB = DAC ADDRESS; LSB = D11-D8
+	DeviceData[2] = (DacValue & 0b000011111111); // LSB D7-D0
+	DeviceData[3] = 0x00; // Don't Cares
+	HAL_GPIO_WritePin(SPI3_NSS_TxDAC_GPIO_Port, SPI3_NSS_TxDAC_Pin, GPIO_PIN_RESET); // SPI3 CS -> TxDAC
+	HAL_SPI_Transmit(&hspi3, (uint8_t *)DeviceData, 4, 100);
+	HAL_GPIO_WritePin(SPI3_NSS_TxDAC_GPIO_Port, SPI3_NSS_TxDAC_Pin, GPIO_PIN_SET); // SPI3 CS -> TxDAC
+	HAL_Delay(1); // Delay in milliseconds
+
+	// Enable the External Tx DAC's internal 2.5V reference voltage
+	DeviceData[0] = 0x08;
+	DeviceData[1] = 0x00;
+	DeviceData[2] = 0x00;
+	DeviceData[3] = 0x01;
+	HAL_GPIO_WritePin(SPI3_NSS_TxDAC_GPIO_Port, SPI3_NSS_TxDAC_Pin, GPIO_PIN_RESET); // SPI3 CS -> TxDAC
+	HAL_SPI_Transmit(&hspi3, (uint8_t *)DeviceData, 4, 100);
+	HAL_GPIO_WritePin(SPI3_NSS_TxDAC_GPIO_Port, SPI3_NSS_TxDAC_Pin, GPIO_PIN_SET); // SPI3 CS -> TxDAC
+	HAL_Delay(1); // Delay in milliseconds
 }
 
 /* USER CODE END 4 */
-
-/* USER CODE BEGIN Header_CommandProcessTaskFunc */
-/**
-  * @brief  Function implementing the CommandProcessTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_CommandProcessTaskFunc */
-void CommandProcessTaskFunc(void *argument)
-{
-  /* USER CODE BEGIN 5 */
-
-  uint8_t Spi1RxByte;
-
-  while(1){
-	  Spi1RxByte = OPENBL_SPI_ReadByte();
-
-	  if( (SPI_GetSpiDetected() == 0U) && (Spi1RxByte == 0x5AU) ) // SPI_SYNC_BYTE -> Synchronization byte
-	  {
-		SPI_SetSpiDetected(1U);
-		OPENBL_SPI_SendByte(SYNC_BYTE); // Send synchronization byte
-		OPENBL_SPI_SendAcknowledgeByte(ACK_BYTE); // Send acknowledgment
-		OPENBL_InterfaceDetection();
-		break;
-	  }
-  }
-
-  // Infinite loop
-  while(1){
-      // Process the commands from the detected interface
-      OPENBL_CommandProcess();
-  }
-
-  /* USER CODE END 5 */
-}
-
-/* USER CODE BEGIN Header_USART1TerminalTaskFunc */
-/**
-* @brief Function implementing the USART1TermTask thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_USART1TerminalTaskFunc */
-void USART1TerminalTaskFunc(void *argument)
-{
-  /* USER CODE BEGIN USART1TerminalTaskFunc */
-  USART1TerminalTaskUserCode();
-  /* USER CODE END USART1TerminalTaskFunc */
-}
 
 /**
   * @brief  Period elapsed callback in non blocking mode

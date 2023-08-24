@@ -25,6 +25,8 @@
 #include "spi_interface.h"
 #include "common_interface.h"
 
+#include "main.h"
+
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
 #define OPENBL_SPI_COMMANDS_NB_MAX        13U  /* Number of supported commands */
@@ -278,15 +280,25 @@ void OPENBL_SPI_WriteMemory(void)
       /* Send NACk if Checksum is incorrect */
       if (OPENBL_SPI_ReadByte() != xor)
       {
+        // Stop SOM from timing out.
+        HAL_GPIO_WritePin(GPIO1_GPIO_Port, GPIO1_Pin, GPIO_PIN_SET); // Assert busy flag to say NOT BUSY
+
         OPENBL_SPI_SendAcknowledgeByte(NACK_BYTE);
+
+        HAL_GPIO_WritePin(GPIO1_GPIO_Port, GPIO1_Pin, GPIO_PIN_RESET); // Deassert busy flag until needed again
       }
       else
       {
         /* Write data to memory */
         OPENBL_MEM_Write(address, (uint8_t *)SPI_RAM_Buf, codesize);
 
+        // Flash operations are slow. Make SOM wait.
+        HAL_GPIO_WritePin(GPIO1_GPIO_Port, GPIO1_Pin, GPIO_PIN_SET); // Assert busy flag to say NOT BUSY
+
         /* Send last Acknowledge synchronization byte */
         OPENBL_SPI_SendAcknowledgeByte(ACK_BYTE);
+
+        HAL_GPIO_WritePin(GPIO1_GPIO_Port, GPIO1_Pin, GPIO_PIN_RESET); // Deassert busy flag until needed again
 
         /* Launch Option Bytes reload */
         Common_StartPostProcessing();
@@ -527,7 +539,12 @@ void OPENBL_SPI_EraseMemory(void)
       }
     }
 
+    // Flash operations are slow. Make SOM wait.
+    HAL_GPIO_WritePin(GPIO1_GPIO_Port, GPIO1_Pin, GPIO_PIN_SET); // Assert busy flag to say NOT BUSY
+
     OPENBL_SPI_SendAcknowledgeByte(status);
+
+    HAL_GPIO_WritePin(GPIO1_GPIO_Port, GPIO1_Pin, GPIO_PIN_RESET); // Deassert busy flag until needed again
   }
 }
 

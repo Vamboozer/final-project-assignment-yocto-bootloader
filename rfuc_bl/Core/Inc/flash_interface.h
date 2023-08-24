@@ -31,7 +31,7 @@ void OPENBL_FLASH_OB_Launch(void);
 uint8_t OPENBL_FLASH_Read(uint32_t Address);
 void OPENBL_FLASH_Write(uint32_t Address, uint8_t *pData, uint32_t DataLength);
 void OPENBL_FLASH_Unlock(void);
-//ErrorStatus OPENBL_FLASH_MassErase(uint8_t *pData, uint32_t DataLength);
+ErrorStatus OPENBL_FLASH_MassErase(uint8_t *pData, uint32_t DataLength);
 ErrorStatus OPENBL_FLASH_Erase(uint8_t *pData, uint32_t DataLength);
 ErrorStatus OPENBL_FLASH_SetWriteProtection(FunctionalState State, uint32_t OB_WrpArea);
 

@@ -26,6 +26,7 @@ extern "C" {
 #define SYNC_BYTE                         0xA5U             /* Synchronization byte */
 #define SPECIAL_CMD_SIZE_BUFFER1          128U              /* Special command received data buffer size */
 #define SPECIAL_CMD_SIZE_BUFFER2          1024U             /* Special command write data buffer size */
+#define FLASH3_ADDRESS					  0x81FE000			/* Shared memory for getting RFuC version from RFuC App */
 
 /* ---------------------- Open Bootloader Commands ---------------------------*/
 #define CMD_GET_COMMAND                   0x00U             /* Get commands command */
@@ -107,10 +108,16 @@ typedef struct
   uint8_t Buffer2[SPECIAL_CMD_SIZE_BUFFER2];
 } OPENBL_SpecialCmdTypeDef;
 
+typedef struct {
+    char RFuCSHA1Hash[41];
+    char RFuCDate[25];
+    char CompileDate[25];
+    char Validity[6];
+} VersionInfo;
+
 /* Exported macro ------------------------------------------------------------*/
 /* Exported functions --------------------------------------------------------*/
 void OPENBL_Init(void);
-void OPENBL_DeInit(void);
 void OPENBL_InterfacesDeInit(void);
 uint32_t OPENBL_InterfaceDetection(void);
 void OPENBL_CommandProcess(void);

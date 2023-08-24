@@ -19,20 +19,17 @@
 /* Includes ------------------------------------------------------------------*/
 #include "platform.h"
 #include "common_interface.h"
-
 #include "openbl_mem.h"
-
 #include "app_openbootloader.h"
 #include "flash_interface.h"
 #include "optionbytes_interface.h"
+#include "main.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
 #define FLASH_PAGE_NUMBER              ((uint16_t)256U)
-
 #define OPENBL_FLASH_TIMEOUT_VALUE       0x00000FFFU
-
-#define FLASH_PROG_STEP_SIZE             ((uint8_t)16U)
+#define FLASH_PROG_STEP_SIZE             ((uint8_t)1U)
 
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
@@ -48,7 +45,7 @@ static uint32_t Flash_BusyState          = FLASH_BUSY_STATE_DISABLED;
                                            };*/
 
 /* Private function prototypes -----------------------------------------------*/
-static void OPENBL_FLASH_Program(uint32_t FlashAddress, uint32_t DataAddress);
+//static void OPENBL_FLASH_Program(uint32_t FlashAddress, uint32_t DataAddress);
 static ErrorStatus OPENBL_FLASH_EnableWriteProtection(uint32_t OB_WrpArea);
 static ErrorStatus OPENBL_FLASH_DisableWriteProtection(void);
 
@@ -64,9 +61,11 @@ OPENBL_MemoryTypeDef FLASH_Descriptor =
   NULL,
   OPENBL_FLASH_SetWriteProtection,
   OPENBL_FLASH_JumpToAddress,
-  NULL,
+  OPENBL_FLASH_MassErase,
   OPENBL_FLASH_Erase
 };
+
+extern TIM_HandleTypeDef htim3;
 
 /* Exported functions --------------------------------------------------------*/
 
@@ -119,8 +118,7 @@ uint8_t OPENBL_FLASH_Read(uint32_t Address)
 void OPENBL_FLASH_Write(uint32_t Address, uint8_t *pData, uint32_t DataLength)
 {
   uint32_t index;
-  __ALIGNED(4) uint8_t data[FLASH_PROG_STEP_SIZE] = {0x0U};
-  uint8_t remaining;
+  uint64_t data;
 
   if ((pData != NULL) && (DataLength != 0U))
   {
@@ -130,40 +128,39 @@ void OPENBL_FLASH_Write(uint32_t Address, uint8_t *pData, uint32_t DataLength)
     /* Clear error programming flags */
     __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
 
-    /* Program double-word by double-word (16 bytes) */
-    while ((DataLength >> 4U) > 0U)
+    /* Program 64 bits at a time */
+    while (DataLength >= 8U)
     {
-      for (index = 0U; index < FLASH_PROG_STEP_SIZE; index++)
+      data = 0;
+      for (index = 0U; index < 8U; index++)
       {
-        data[index] = *(pData + index);
+        data |= (uint64_t)pData[index] << (8 * index); // Packing 8-bit values into 64-bit word
       }
 
-      OPENBL_FLASH_Program(Address, (uint32_t)data);
+      /* Clear all FLASH errors flags before starting write operation */
+      __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
 
-      Address    += FLASH_PROG_STEP_SIZE;
-      pData      += FLASH_PROG_STEP_SIZE;
-      DataLength -= FLASH_PROG_STEP_SIZE;
+      HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, Address, data);
+
+      Address    += 8U;
+      pData      += 8U;
+      DataLength -= 8U;
     }
 
-    /* If remaining count, go back to fill the rest with 0xFF */
+    /* If remaining count, pack the rest and fill with 0xFF */
     if (DataLength > 0U)
     {
-      remaining = FLASH_PROG_STEP_SIZE - DataLength;
-
-      /* Copy the remaining bytes */
+      data = 0xFFFFFFFFFFFFFFFFU;
       for (index = 0U; index < DataLength; index++)
       {
-        data[index] = *(pData + index);
+        data &= ~(0xFFULL << (8 * index));
+        data |= (uint64_t)pData[index] << (8 * index);
       }
 
-      /* Fill the upper bytes with 0xFF */
-      for (index = 0U; index < remaining; index++)
-      {
-        data[index + DataLength] = 0xFFU;
-      }
+      /* Clear all FLASH errors flags before starting write operation */
+      __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
 
-      /* FLASH word program */
-      OPENBL_FLASH_Program(Address, (uint32_t)data);
+      HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, Address, data);
     }
 
     /* Lock the Flash to disable the flash control register access */
@@ -178,20 +175,85 @@ void OPENBL_FLASH_Write(uint32_t Address, uint8_t *pData, uint32_t DataLength)
   */
 void OPENBL_FLASH_JumpToAddress(uint32_t Address)
 {
-  Function_Pointer jump_to_address;
+  // === De-initialize all HW resources to their reset values ===
+  // Disable interfaces
+  HAL_SPI_DeInit(&hspi1);
+  HAL_SPI_DeInit(&hspi2);
+  HAL_SPI_DeInit(&hspi3);
+  HAL_UART_DeInit(&huart1);
 
-  /* De-initialize all HW resources used by the Open Bootloader to their reset values */
-  OpenBootloader_DeInit();
+  // Peripherals to intentionally keep initialized:
+  //HAL_GPIO_DeInit(); // All GPIO
 
-  /* Enable IRQ */
-  Common_EnableIrq();
+  HAL_GPIO_DeInit(GPIOH, GPO_TP17_Pin|GPIO2_Pin|GPIO3_Pin);
+  HAL_GPIO_DeInit(GPIOE, GPO_SBANDRX_Pin|GPO_DEN_Pin|GPO_RXLOEN_Pin|SPI2_NSS_RxSynth_Pin
+					  	  |SPI2_NSS_RxDAC_Pin|GPO_RXPDEN_Pin|GPO_RXLNASD_Pin|GPO_PHVRXEN_Pin
+						  |GPO_HEATON_Pin|GPO_RSEL2n_Pin|GPO_RSEL3n_Pin|GPO_RSEL1n_Pin
+						  |GPO_RSEL0n_Pin|GPO_LPBK1_Pin|GPO_LPBK0_Pin);
+  HAL_GPIO_DeInit(GPIOI, SPI2_NSS_IqDemod_Pin|GPO_TP14_Pin|GPO_TP15_Pin);
+  HAL_GPIO_DeInit(GPI_MPAEN_GPIO_Port, GPI_MPAEN_Pin);
+  HAL_GPIO_DeInit(GPIOB, GPO_MEN_Pin|GPO_SBANDTX_Pin|GPO_PHVTXEN_Pin|GPO_TSEL0n_Pin
+          	  	  	  	  |GPO_TXPDEN_Pin|GPO_TSEL2n_Pin|GPO_TSEL1n_Pin);
+  HAL_GPIO_DeInit(GPIOC, SPI3_NSS_TxDAC_Pin|GPO_TXLOEN_Pin|GPO_STXDEN_Pin|GPO_CTXDEN_Pin);
+  HAL_GPIO_DeInit(GPIO1_GPIO_Port, GPIO1_Pin);
+  HAL_GPIO_DeInit(GPI_DO_NOT_USE_GPIO_Port, GPI_DO_NOT_USE_Pin);
+  HAL_GPIO_DeInit(SPI3_NSS_TxSynth_GPIO_Port, SPI3_NSS_TxSynth_Pin);
+  HAL_GPIO_DeInit(GPIO0_GPIO_Port, GPIO0_Pin);
+  HAL_GPIO_DeInit(GPIOG, SPI3_NSS_AR_Pin|GPO_TPX_Pin|GPO_TP16_Pin);
+  HAL_GPIO_DeInit(I2C3SDA_EEPROM_GPIO_Port, I2C3SDA_EEPROM_Pin);
+  HAL_GPIO_DeInit(GPIOC, DMDTMP_Pin|P28VPA_Pin);
+  HAL_GPIO_DeInit(GPIOA, TXRPWR_Pin|CRTNSENSE_Pin);
 
-  jump_to_address = (Function_Pointer)(*(__IO uint32_t *)(Address + 4U));
+  __HAL_RCC_GPIOH_CLK_DISABLE();
+  __HAL_RCC_GPIOE_CLK_DISABLE();
+  __HAL_RCC_GPIOB_CLK_DISABLE();
+  __HAL_RCC_GPIOA_CLK_DISABLE();
+  __HAL_RCC_GPIOI_CLK_DISABLE();
+  __HAL_RCC_GPIOG_CLK_DISABLE();
+  __HAL_RCC_GPIOD_CLK_DISABLE();
+  __HAL_RCC_GPIOC_CLK_DISABLE();
+  HAL_DAC_DeInit(&hdac1); // Both MCU DACs
 
-  /* Initialize user application's stack pointer */
-  Common_SetMsp(*(__IO uint32_t *) Address);
+  // Disable timer
+  HAL_TIM_Base_DeInit(&htim3);
+  HAL_TIM_Base_Stop_IT(&htim3);
+  __HAL_RCC_TIM3_CLK_DISABLE();
+  //HAL_NVIC_DisableIRQ(TIM3_IRQn);
+  HAL_RCC_DeInit();
 
-  jump_to_address();
+  // Disable systick timer and reset it to default values
+  SysTick->CTRL = 0;
+  SysTick->LOAD = 0;
+  SysTick->VAL = 0;
+  HAL_DeInit(); // reset all peripherals
+
+  // Disable ALL IRQs at the peripheral level
+  for(int i = -14; i < 94; i++)
+  {
+	  HAL_NVIC_DisableIRQ(i);
+  }
+
+  // Disable all the interrupts at the CPU level
+  __disable_irq(); // If there are any IRQs left.
+
+  uint32_t stack_pointer = *(__IO uint32_t *) Address;
+  uint32_t program_counter = *(__IO uint32_t *)(Address + 4U);
+
+  // Update vector table location
+  SCB->VTOR = Address;
+
+  // Initialize user application's stack pointer
+  __set_MSP(stack_pointer);
+
+  // Create pointer to the beginning of the application code and run
+  void (*jump_to_application)(void) = (void(*)(void))program_counter; // AKA: reset_handler
+  //NVIC_SystemReset(); // reset & bootup in jump_to_application();
+
+  // Enable all the interrupts at the CPU level
+  __enable_irq();
+
+  jump_to_application(); // Run the RFuC Application
+  while(1){}; // Never get here
 }
 
 /**
@@ -254,7 +316,6 @@ ErrorStatus OPENBL_FLASH_SetWriteProtection(FunctionalState State, uint32_t OB_W
   *          - SUCCESS: Mass erase operation done
   *          - ERROR:   Mass erase operation failed or the value of one parameter is not OK
   */
-/*
 ErrorStatus OPENBL_FLASH_MassErase(uint8_t *pData, uint32_t DataLength)
 {
   uint32_t sector_error;
@@ -313,7 +374,6 @@ ErrorStatus OPENBL_FLASH_MassErase(uint8_t *pData, uint32_t DataLength)
 
   return status;
 }
-*/
 
 /**
   * @brief  This function is used to erase the specified FLASH pages.
@@ -424,13 +484,13 @@ void OPENBL_Disable_BusyState_Flag(void)
   * @param  DataAddress specifies the address of data to be programmed.
   * @retval None.
   */
-static void OPENBL_FLASH_Program(uint32_t FlashAddress, uint32_t DataAddress)
+/*static void OPENBL_FLASH_Program(uint32_t FlashAddress, uint32_t DataAddress)
 {
-  /* Clear all FLASH errors flags before starting write operation */
+  // Clear all FLASH errors flags before starting write operation
   __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
 
   HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, FlashAddress, DataAddress);
-}
+}*/
 
 /**
   * @brief  This function is used to enable write protection of the specified FLASH areas.

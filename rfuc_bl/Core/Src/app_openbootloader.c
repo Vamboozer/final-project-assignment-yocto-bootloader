@@ -33,8 +33,6 @@
 //#include "engibytes_interface.h"
 #include "systemmemory_interface.h"
 
-#include "USART1Terminal.h"
-
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
@@ -53,14 +51,15 @@ static OPENBL_OpsTypeDef SPI_Ops =
 /* Exported variables --------------------------------------------------------*/
 uint16_t SpecialCmdList[SPECIAL_CMD_MAX_NUMBER] =
 {
-  //SPECIAL_CMD_DEFAULT
-  SPECIAL_CMD_0
+  SPECIAL_CMD_DEFAULT,
+  SPECIAL_CMD_GET_RFUC_VERSION,
+  SPECIAL_CMD_RFUC_VERSION_SYNC
 };
 
 uint16_t ExtendedSpecialCmdList[EXTENDED_SPECIAL_CMD_MAX_NUMBER] =
 {
-  //SPECIAL_CMD_DEFAULT
-  SPECIAL_CMD_0
+  SPECIAL_CMD_DEFAULT
+  //SPECIAL_CMD_...
 };
 
 OPENBL_CommandsTypeDef SPI_Cmd =
@@ -117,16 +116,6 @@ void OpenBootloader_Init(void)
 }
 
 /**
-  * @brief  DeInitialize open Bootloader.
-  * @param  None.
-  * @retval None.
-  */
-void OpenBootloader_DeInit(void)
-{
-  System_DeInit();
-}
-
-/**
   * @brief  This function is used to select which protocol will be used when communicating with the host.
   * @param  None.
   * @retval None.
@@ -143,13 +132,11 @@ void OpenBootloader_ProtocolDetection(void)
     if (interface_detected == 1U)
     {
       OPENBL_InterfacesDeInit();
-      PRINTF("ERROR: Interfaces not detected\n\r");
     }
   }
 
   if (interface_detected == 1U)
   {
     OPENBL_CommandProcess();
-    PRINTF("Interface detected\n\r");
   }
 }

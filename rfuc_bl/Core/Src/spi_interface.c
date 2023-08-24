@@ -24,10 +24,10 @@
 #include "openbl_spi_cmd.h"
 
 #include "spi_interface.h"
-//#include "iwdg_interface.h"
+#include "app_openbootloader.h"
 
-#include "USART1Terminal.h"
 #include "stm32l4xx_it.h"
+#include "main.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -422,6 +422,35 @@ void OPENBL_SPI_SpecialCommandProcess(OPENBL_SpecialCmdTypeDef *pSpecialCmd)
 {
   switch (pSpecialCmd->OpCode)
   {
+  	case SPECIAL_CMD_GET_RFUC_VERSION:
+    {
+      // Retrieve RFuC version info from shared memory
+	  VersionInfo versionInfo;
+	  uint8_t *pFlash = (uint8_t *)FLASH3_ADDRESS;
+	  uint8_t *pDest = (uint8_t *)&versionInfo;
+	  for (size_t i = 0; i < sizeof(VersionInfo); i++)
+	  {
+		pDest[i] = pFlash[i]; // Read directly from FLASH3 memory (See linker script)
+	  }
+
+      // Send the data size
+      uint16_t dataSize = sizeof(VersionInfo);
+      OPENBL_SPI_SendByte((dataSize >> 8) & 0xFFU);
+      OPENBL_SPI_SendByte(dataSize & 0xFFU);
+
+      // Send the data
+      uint8_t *pData = (uint8_t *)&versionInfo;
+      for (uint16_t i = 0; i < dataSize; i++)
+      {
+        OPENBL_SPI_SendByte(pData[i]);
+      }
+
+      // Send NULL status size
+      OPENBL_SPI_SendByte(0x00U);
+      OPENBL_SPI_SendByte(0x00U);
+    }
+    break;
+
     /* Unknown command opcode */
     default:
       if (pSpecialCmd->CmdType == OPENBL_SPECIAL_CMD)
