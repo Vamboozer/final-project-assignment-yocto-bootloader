@@ -9,7 +9,7 @@ import time
 GPIO_SYNC_PIN = 17
 SPI_BUS = 0
 SPI_DEVICE = 0
-SPI_SPEED = 187000  # 187 KHz
+SPI_SPEED = 600000  # 0.6 MHz
 SPI_MODE = 0b01     # CPOL=0, CPHA=1
 
 ACK_BYTE = 0x79
@@ -54,6 +54,8 @@ def cleanup():
     sys.exit(0)  # Exit script with success status
 
 def SpiTxRxByte(byte):
+    while GPIO.input(GPIO_SYNC_PIN) == GPIO.LOW:
+        pass
     return spi.xfer2([byte])[0]  # Returns the received byte
 
 def waitForSync():
@@ -232,17 +234,6 @@ def massEraseRfucApplication():
     checksum = ((BANK_2_MASS_ERASE >> 8) & 0xFF) ^ (BANK_2_MASS_ERASE & 0xFF)
     SpiTxRxByte(checksum)
 
-    # Wait to allow time for mass erase operation.
-    counter = 0
-    timeout_limit = 5
-    while True:
-        if GPIO.input(GPIO_SYNC_PIN) == GPIO.HIGH:
-            break
-        time.sleep(0.1) # Units are in seconds.
-        counter += 1
-        if counter >= timeout_limit:
-            raise TimeoutError("Mass Erase of RFuC Timed Out after 500ms.")
-
     acknowledgeFrame()
 
     print("Mass Erase of RFuC (Bank 2) Complete.")
@@ -297,17 +288,6 @@ def updateToLatestRfucApplication():
             ## Send checksum
             SpiTxRxByte(checksum)
 
-            # Wait to allow time for chunk write operation.
-            counter = 0
-            timeout_limit = 10
-            while True:
-                if GPIO.input(GPIO_SYNC_PIN) == GPIO.HIGH:
-                    break
-                time.sleep(0.01) # Units are in seconds.
-                counter += 1
-                if counter >= timeout_limit:
-                    raise TimeoutError("Mass Erase of RFuC Timed Out after 100 ms.")
-
             acknowledgeFrame()
 
             address += CHUNK_SIZE # Update the address for the next chunk
@@ -323,6 +303,12 @@ def verifyFlashedRfuc():
         address = RFuC_START_ADDRESS
         chunk = bin_file.read(CHUNK_SIZE)
         while chunk:
+            # Skip write operation if the chunk contains only blank values
+            if all(byte == 0x00 for byte in chunk):
+                address += CHUNK_SIZE # Update the address for the next chunk
+                chunk = bin_file.read(CHUNK_SIZE) # Read the next chunk
+                continue
+
             # Send Write Memory header
             SpiTxRxByte(0x5A)
             SpiTxRxByte(CMD_READ_FROM_MEMORY)
@@ -330,8 +316,9 @@ def verifyFlashedRfuc():
             acknowledgeFrame()
 
             sendAddress(address) # Send data frame start address
-            SpiTxRxByte(len(chunk)) # Send number of bytes to be read
-            sendOnesComplement(len(chunk)) # Send checksum
+
+            SpiTxRxByte(len(chunk)-1) # Send number of bytes to be read
+            sendOnesComplement(len(chunk)-1) # Send checksum
             acknowledgeFrame()
 
             # Receive requested data
@@ -344,9 +331,10 @@ def verifyFlashedRfuc():
             for byte in chunk:
                 LatestData.append(byte)
             if ReadData != LatestData:
-                print("address: 0x" + str(address))
-                print("ReadData: " + str(ReadData))
-                print("LatestData: " + str(LatestData))
+                print(f"address: 0x{address:08X}")
+                print(f"chunk size: {len(chunk)}")
+                print("ReadData: " + ' '.join(f'{x:02X}' for x in ReadData))
+                print("LatestData: " + ' '.join(f'{x:02X}' for x in LatestData))
                 raise Exception("ERROR: Failed to validate RFuC firmware update was successful")
 
             address += CHUNK_SIZE # Update the address for the next chunk
@@ -379,7 +367,7 @@ def main():
         cleanup()
     massEraseRfucApplication()
     updateToLatestRfucApplication()
-    #verifyFlashedRfuc()
+    verifyFlashedRfuc()
     jumpToRfucApplication()
     cleanup()
 
